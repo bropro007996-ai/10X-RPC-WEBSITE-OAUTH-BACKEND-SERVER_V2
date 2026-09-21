@@ -88,6 +88,93 @@ const server = http.createServer(async (req, res) => {
   }
 
 
+
+  // GET /debug-payload?userId=xxx — returns the exact OP 3 payload the daemon would send
+  if (path === '/debug-payload') {
+    try {
+      const userId = url.searchParams.get('userId')
+      if (!userId) {
+        res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify({ error: 'missing userId' }))
+        return
+      }
+      const { PrismaClient } = require('@prisma/client')
+      const db = new PrismaClient()
+      const session = await db.session.findFirst({
+        where: { userId, expiresAt: { gt: new Date() } },
+        include: { user: { include: { trial: true, globalConfig: true } } }
+      })
+      if (!session) {
+        res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify({ error: 'session not found' }))
+        await db.$disconnect()
+        return
+      }
+      const rpcConfig = await db.rpcConfig.findFirst({ where: { userId } })
+      const gameRpcConfig = await db.gameRpcConfig.findUnique({ where: { userId } })
+      await db.$disconnect()
+
+      // Build the activity payload using the SAME code the daemon uses
+      const { buildActivityPayload, buildGameActivityPayload, buildPresenceActivities } = require('./src/lib/rpc-manager')
+      const { findSpoofGame } = require('./src/lib/spoof-games')
+
+      const placeholderCtx = {
+        timezone: session.user?.globalConfig?.timezone || 'UTC',
+        city: session.user?.globalConfig?.city || undefined,
+        rpcStartedAt: rpcConfig?.updatedAt ? new Date(rpcConfig.updatedAt).getTime() : Date.now(),
+      }
+
+      const isRpcActive = !!(session.rpcEnabled && rpcConfig?.enabled)
+      const isGamesRpcActive = !!(session.gamesRpcEnabled && gameRpcConfig?.enabled)
+      const isStatusActive = !!session.statusEnabled
+
+      // Build Normal RPC activity (if active)
+      let normalActivity = null
+      if (isRpcActive && rpcConfig) {
+        normalActivity = await buildActivityPayload(rpcConfig, placeholderCtx)
+      }
+
+      // Build Games RPC activity (if active)
+      let gameActivity = null
+      if (isGamesRpcActive && gameRpcConfig) {
+        const game = findSpoofGame(gameRpcConfig.gameSlug)
+        if (game) {
+          gameActivity = await buildGameActivityPayload({
+            gameSlug: game.slug, name: game.name, appId: game.app_id, img: game.img,
+            state: gameRpcConfig.state, details: gameRpcConfig.details,
+            largeImage: gameRpcConfig.largeImage, largeText: gameRpcConfig.largeText,
+            smallImage: gameRpcConfig.smallImage, smallText: gameRpcConfig.smallText,
+            button1Label: gameRpcConfig.button1Label, button1Url: gameRpcConfig.button1Url,
+            button2Label: gameRpcConfig.button2Label, button2Url: gameRpcConfig.button2Url,
+            partyCurrent: gameRpcConfig.partyCurrent, partyMax: gameRpcConfig.partyMax,
+            startMinsAgo: gameRpcConfig.startMinsAgo, endTotalMins: gameRpcConfig.endTotalMins,
+            updatedAt: gameRpcConfig.updatedAt,
+          }, placeholderCtx)
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({
+        userId,
+        username: session.user?.username,
+        isRpcActive,
+        isGamesRpcActive,
+        isStatusActive,
+        rpcConfig_largeImage: rpcConfig?.largeImage,
+        rpcConfig_largeImage_type: rpcConfig?.largeImage ? (rpcConfig.largeImage.startsWith('http') ? 'URL' : 'key') : null,
+        normalActivity,
+        gameActivity,
+        normalActivity_largeImage: normalActivity?.assets?.large_image || null,
+        gameActivity_largeImage: gameActivity?.assets?.large_image || null,
+      }, null, 2))
+      return
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ error: e.message, stack: e.stack?.split('\n').slice(0,5) }))
+      return
+    }
+  }
+
   // GET /debug — test fetch + asset listing (diagnostic)
   if (path === '/debug') {
     try {
