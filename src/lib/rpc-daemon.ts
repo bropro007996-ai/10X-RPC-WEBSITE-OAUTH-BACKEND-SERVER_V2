@@ -561,6 +561,9 @@ export class RpcDaemon {
               d: {
                 token: bearerToken,
                 properties,
+                // Intents: 0 = no privileged intents needed for presence updates.
+                // The main gateway requires the intents field; the Gaming SDK gateway ignores it.
+                intents: 0,
               },
             }
             ws.send(JSON.stringify(identify))
