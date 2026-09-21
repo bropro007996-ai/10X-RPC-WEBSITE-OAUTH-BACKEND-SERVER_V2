@@ -9,6 +9,36 @@ import type { PlaceholderContext } from './placeholders'
 import { resolvePlaceholders } from './placeholders'
 import { resolveRpcActivityName } from './constants'
 
+/**
+ * Convert an image reference to Discord's expected format.
+ *
+ * Discord's `large_image` / `small_image` fields accept:
+ *   1. A Discord asset key (uploaded via Developer Portal) — returned as-is
+ *   2. `mp:external/<base64url>` for external images — HTTPS URLs are encoded
+ *   3. If omitted entirely, Discord shows the app's default icon based on application_id
+ *
+ * Raw HTTPS URLs are NOT accepted — Discord silently drops them, causing the image
+ * to not appear. This helper converts HTTPS URLs to the mp:external format.
+ */
+function toDiscordImage(image: string | null | undefined): string | null {
+  if (!image) return null
+  const trimmed = image.trim()
+  if (!trimmed) return null
+  // Already a Discord asset key or mp:external format
+  if (trimmed.startsWith('mp:') || trimmed.startsWith('spotify:')) return trimmed
+  // HTTPS URL → convert to mp:external/<base64url>
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const b64 = Buffer.from(trimmed).toString('base64url')
+      return `mp:external/${b64}`
+    } catch {
+      return null
+    }
+  }
+  // Otherwise it's a Discord asset key — return as-is
+  return trimmed
+}
+
 // Activity types mapped to Discord's numeric values
 export const ACTIVITY_TYPE_MAP: Record<string, number> = {
   PLAYING: 0,
@@ -87,11 +117,14 @@ export async function buildActivityPayload(
     activity.party = party
   }
 
-  // Assets (images)
+  // Assets (images) — convert URLs to Discord's mp:external format
+  // Raw HTTPS URLs are NOT accepted by Discord (image won't show).
   const assets: Record<string, string> = {}
-  if (cfg.largeImage) assets.large_image = cfg.largeImage
+  const largeImg = toDiscordImage(cfg.largeImage)
+  if (largeImg) assets.large_image = largeImg
   if (cfg.largeText) assets.large_text = cfg.largeText
-  if (cfg.smallImage) assets.small_image = cfg.smallImage
+  const smallImg = toDiscordImage(cfg.smallImage)
+  if (smallImg) assets.small_image = smallImg
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
@@ -191,13 +224,25 @@ export async function buildGameActivityPayload(
     activity.party = party
   }
 
-  // Assets — use the game's official icon as large_image by default
+  // Assets
+  // CRITICAL: For spoofed games (application_id = game's app_id), if large_image
+  // is NOT set, Discord automatically shows the game's official icon based on
+  // application_id. If we set a raw HTTPS URL, Discord silently drops it (no image).
+  // So: if the user provided a CUSTOM image, convert it to mp:external format.
+  // If no custom image, OMIT large_image entirely — Discord uses the app's default icon.
   const assets: Record<string, string> = {}
-  const largeImg = cfg.largeImage || cfg.img
-  if (largeImg) assets.large_image = largeImg
+  if (cfg.largeImage) {
+    // User provided a custom image — convert to Discord format
+    const converted = toDiscordImage(cfg.largeImage)
+    if (converted) assets.large_image = converted
+  }
+  // If no custom largeImage, OMIT it — Discord shows the game's official icon via application_id
   if (cfg.largeText) assets.large_text = cfg.largeText
   else if (cfg.name) assets.large_text = cfg.name
-  if (cfg.smallImage) assets.small_image = cfg.smallImage
+  if (cfg.smallImage) {
+    const smallConverted = toDiscordImage(cfg.smallImage)
+    if (smallConverted) assets.small_image = smallConverted
+  }
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
