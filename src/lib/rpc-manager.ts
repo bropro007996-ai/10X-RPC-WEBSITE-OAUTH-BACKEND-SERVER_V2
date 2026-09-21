@@ -8,6 +8,7 @@ import type { RpcConfig } from './api-client'
 import type { PlaceholderContext } from './placeholders'
 import { resolvePlaceholders } from './placeholders'
 import { resolveRpcActivityName } from './constants'
+import { resolveImageToAssetKey } from './discord-assets'
 
 /**
  * Convert an image reference to Discord's expected format.
@@ -117,13 +118,14 @@ export async function buildActivityPayload(
     activity.party = party
   }
 
-  // Assets (images) — convert URLs to Discord's mp:external format
-  // Raw HTTPS URLs are NOT accepted by Discord (image won't show).
+  // Assets (images) — upload custom images to Discord app as assets (returns asset key)
+  // Raw HTTPS URLs and mp:external/ do NOT work on the Gaming SDK gateway — the image
+  // is silently dropped. We upload the image via the bot token and use the asset key.
   const assets: Record<string, string> = {}
-  const largeImg = toDiscordImage(cfg.largeImage)
+  const largeImg = await resolveImageToAssetKey(cfg.largeImage)
   if (largeImg) assets.large_image = largeImg
   if (cfg.largeText) assets.large_text = cfg.largeText
-  const smallImg = toDiscordImage(cfg.smallImage)
+  const smallImg = await resolveImageToAssetKey(cfg.smallImage)
   if (smallImg) assets.small_image = smallImg
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
@@ -225,23 +227,20 @@ export async function buildGameActivityPayload(
   }
 
   // Assets
-  // CRITICAL: For spoofed games (application_id = game's app_id), if large_image
-  // is NOT set, Discord automatically shows the game's official icon based on
-  // application_id. If we set a raw HTTPS URL, Discord silently drops it (no image).
-  // So: if the user provided a CUSTOM image, convert it to mp:external format.
-  // If no custom image, OMIT large_image entirely — Discord uses the app's default icon.
+  // For spoofed games (application_id = game's app_id), if no custom image is provided,
+  // OMIT large_image entirely — Discord shows the game's official icon via application_id.
+  // If a custom image IS provided, upload it as a Discord app asset (returns key) —
+  // raw HTTPS URLs and mp:external/ do NOT work on the Gaming SDK gateway.
   const assets: Record<string, string> = {}
   if (cfg.largeImage) {
-    // User provided a custom image — convert to Discord format
-    const converted = toDiscordImage(cfg.largeImage)
-    if (converted) assets.large_image = converted
+    const largeKey = await resolveImageToAssetKey(cfg.largeImage)
+    if (largeKey) assets.large_image = largeKey
   }
-  // If no custom largeImage, OMIT it — Discord shows the game's official icon via application_id
   if (cfg.largeText) assets.large_text = cfg.largeText
   else if (cfg.name) assets.large_text = cfg.name
   if (cfg.smallImage) {
-    const smallConverted = toDiscordImage(cfg.smallImage)
-    if (smallConverted) assets.small_image = smallConverted
+    const smallKey = await resolveImageToAssetKey(cfg.smallImage)
+    if (smallKey) assets.small_image = smallKey
   }
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
