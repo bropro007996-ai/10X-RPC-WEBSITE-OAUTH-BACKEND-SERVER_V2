@@ -73,6 +73,10 @@ export async function uploadImageAsAsset(
       const existing = await listRes.json()
       const found = existing.find((a: any) => a.key === key)
       if (found) {
+        // Ensure the existing asset is public (may have been uploaded as private before the fix)
+        if (found.visibility !== 'public') {
+          await setAssetPublic(found.key)
+        }
         const result: UploadedAsset = {
           key: found.key,
           assetId: found.asset_id,
@@ -159,6 +163,11 @@ export async function uploadImageAsAsset(
     }
     const asset = await createRes.json()
 
+    // 5. Set the asset's visibility to PUBLIC (required for it to display in RPC).
+    // Discord defaults bot-uploaded assets to "private" — they won't show in
+    // Rich Presence activities until PATCHed to "public".
+    await setAssetPublic(asset.key)
+
     const result: UploadedAsset = {
       key: asset.key,
       assetId: asset.asset_id,
@@ -170,6 +179,27 @@ export async function uploadImageAsAsset(
   } catch (e) {
     console.error('[uploadImageAsAsset] Error:', e)
     return null
+  }
+}
+
+/**
+ * Set an asset's visibility to "public" via PATCH.
+ * Required for the asset to display in Discord Rich Presence.
+ * Uses the asset KEY (not asset_id) in the URL.
+ */
+async function setAssetPublic(key: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${UPLOAD_API}/${key}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bot ${CONFIG.discord.botToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ visibility: 'public' }),
+    })
+    return res.ok
+  } catch {
+    return false
   }
 }
 
