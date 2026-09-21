@@ -32,6 +32,12 @@ export const CONFIG = {
     geocodeUrl: 'https://geocoding-api.open-meteo.com/v1/search',
     forecastUrl: 'https://api.open-meteo.com/v1/forecast',
   },
+  // Render backend (24/7 daemon) — used by /uptime to health-check the daemon.
+  // Set RENDER_BACKEND_URL in production; empty/absent = daemon not deployed.
+  render: {
+    backendUrl: process.env.RENDER_BACKEND_URL || '',
+    healthPath: '/health',
+  },
   session: {
     cookieName: '10x_rpc_session',
     ttlDays: 7,
