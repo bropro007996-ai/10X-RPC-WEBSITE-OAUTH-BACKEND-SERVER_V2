@@ -65,6 +65,51 @@ function startDaemon() {
 
 const activeDaemon = startDaemon()
 
+// 4. Keep-alive pinger — pings the Vercel frontend's /api/keep-awake every 4 minutes.
+//    This keeps BOTH services warm:
+//      - Vercel /api/keep-awake runs a Neon DB query (Neon suspends after ~5 min inactivity)
+//      - Vercel /api/keep-awake also pings Render's /health (Render sleeps after ~15 min inactivity)
+//    Creates a mutual keep-alive loop: Render -> Vercel -> Render.
+const KEEPALIVE_URL = process.env.NEXT_PUBLIC_APP_URL
+  ? process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '') + '/api/keep-awake'
+  : null
+const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000 // 4 minutes
+
+if (KEEPALIVE_URL) {
+  console.log(`[10X RPC KeepAlive] Pinging ${KEEPALIVE_URL} every 4 min (keeps Neon + Render warm)`)
+
+  function pingKeepAlive() {
+    const req = http.get(KEEPALIVE_URL, { timeout: 15000 }, (res) => {
+      let body = ''
+      res.on('data', (chunk) => { body += chunk })
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(body)
+          const dbMs = data?.results?.database?.ms
+          const renderMs = data?.results?.render?.ms
+          console.log(`[10X RPC KeepAlive] OK ${KEEPALIVE_URL} -> db:${dbMs}ms render:${renderMs}ms`)
+        } catch {
+          console.log(`[10X RPC KeepAlive] OK ${KEEPALIVE_URL} -> HTTP ${res.statusCode}`)
+        }
+      })
+    })
+    req.on('error', (err) => {
+      console.warn(`[10X RPC KeepAlive] FAIL ${err.message}`)
+    })
+    req.on('timeout', () => {
+      req.destroy()
+      console.warn('[10X RPC KeepAlive] FAIL timeout (15s)')
+    })
+  }
+
+  // Initial ping after 10s (let the daemon start first)
+  setTimeout(pingKeepAlive, 10000)
+  // Then every 4 minutes
+  setInterval(pingKeepAlive, KEEPALIVE_INTERVAL_MS)
+} else {
+  console.log('[10X RPC KeepAlive] NEXT_PUBLIC_APP_URL not set - skipping keep-alive pinger')
+}
+
 process.on('SIGINT', () => {
   console.log('[10X RPC Server] Received SIGINT. Shutting down...')
   server.close()
