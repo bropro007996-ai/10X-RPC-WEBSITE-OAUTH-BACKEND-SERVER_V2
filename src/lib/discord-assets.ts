@@ -61,6 +61,31 @@ export async function uploadImageAsAsset(
   const cached = assetCache.get(cacheKey)
   if (cached) return cached
 
+  const key = keyName || hashUrl(trimmed)
+
+  // Check if an asset with this key already exists (avoids "key already exists" error
+  // when the daemon restarts and the in-memory cache is cleared)
+  try {
+    const listRes = await fetch(LIST_API, {
+      headers: { Authorization: `Bot ${CONFIG.discord.botToken}` },
+    })
+    if (listRes.ok) {
+      const existing = await listRes.json()
+      const found = existing.find((a: any) => a.key === key)
+      if (found) {
+        const result: UploadedAsset = {
+          key: found.key,
+          assetId: found.asset_id,
+          url: `https://cdn.discordapp.com/app-assets/${CONFIG.discord.clientId}/${found.asset_id}.png`,
+        }
+        assetCache.set(cacheKey, result)
+        return result
+      }
+    }
+  } catch {
+    // Non-fatal — proceed with upload
+  }
+
   try {
     // 1. Download the image
     const imgRes = await fetch(trimmed)
@@ -72,7 +97,7 @@ export async function uploadImageAsAsset(
       : contentType.includes('gif')
       ? 'gif'
       : 'png'
-    const filename = `${keyName || hashUrl(trimmed)}.${ext}`
+    const filename = `${key}.${ext}`
 
     // 2. Request an upload URL from Discord
     const uploadReqRes = await fetch(`${UPLOAD_API}/upload`, {
@@ -100,7 +125,6 @@ export async function uploadImageAsAsset(
     if (!putRes.ok) return null
 
     // 4. Register the asset with Discord
-    const key = keyName || hashUrl(trimmed)
     const createRes = await fetch(UPLOAD_API, {
       method: 'POST',
       headers: {
@@ -112,7 +136,27 @@ export async function uploadImageAsAsset(
         upload_filename,
       }),
     })
-    if (!createRes.ok) return null
+    if (!createRes.ok) {
+      // If create fails (e.g., key already exists from a race condition),
+      // try listing again to find the existing asset
+      const listRes2 = await fetch(LIST_API, {
+        headers: { Authorization: `Bot ${CONFIG.discord.botToken}` },
+      })
+      if (listRes2.ok) {
+        const existing = await listRes2.json()
+        const found = existing.find((a: any) => a.key === key)
+        if (found) {
+          const result: UploadedAsset = {
+            key: found.key,
+            assetId: found.asset_id,
+            url: `https://cdn.discordapp.com/app-assets/${CONFIG.discord.clientId}/${found.asset_id}.png`,
+          }
+          assetCache.set(cacheKey, result)
+          return result
+        }
+      }
+      return null
+    }
     const asset = await createRes.json()
 
     const result: UploadedAsset = {
