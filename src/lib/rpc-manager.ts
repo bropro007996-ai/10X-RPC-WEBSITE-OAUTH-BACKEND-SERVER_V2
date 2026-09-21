@@ -33,7 +33,8 @@ export interface PresenceResult {
  */
 export async function buildActivityPayload(
   cfg: RpcConfig,
-  placeholderCtx: PlaceholderContext
+  placeholderCtx: PlaceholderContext,
+  applicationIdOverride?: string
 ): Promise<object> {
   const state = await resolvePlaceholders(cfg.state || '', placeholderCtx)
   const details = await resolvePlaceholders(cfg.details || '', placeholderCtx)
@@ -113,9 +114,111 @@ export async function buildActivityPayload(
   // Platform — send-side field for headless/embedded sessions
   if (cfg.platform) activity.platform = cfg.platform
 
-  // Application ID — required for Discord to accept the activity
-  // Use the Discord client ID as the application ID
-  activity.application_id = CONFIG.discord.clientId
+  // Application ID — required for Discord to accept the activity.
+  // Normal RPC uses CONFIG.discord.clientId (the OAuth app).
+  // Games RPC overrides this with a real game's app_id (spoofing).
+  activity.application_id = applicationIdOverride || CONFIG.discord.clientId
+
+  return activity
+}
+
+/**
+ * Build a Games RPC activity payload.
+ * Uses the game's real Discord app_id as application_id — this is what makes
+ * Discord display the game's official icon and name (spoofing).
+ *
+ * SEPARATE from buildActivityPayload (Normal RPC) — different application_id,
+ * different config source (GameRpcConfig vs RpcConfig), never shared.
+ */
+export async function buildGameActivityPayload(
+  cfg: {
+    gameSlug: string
+    name: string
+    appId: string
+    img: string
+    state?: string | null
+    details?: string | null
+    largeImage?: string | null
+    largeText?: string | null
+    smallImage?: string | null
+    smallText?: string | null
+    button1Label?: string | null
+    button1Url?: string | null
+    button2Label?: string | null
+    button2Url?: string | null
+    partyCurrent?: number | null
+    partyMax?: number | null
+    startMinsAgo?: number
+    endTotalMins?: number | null
+    updatedAt?: string | Date
+  },
+  placeholderCtx: PlaceholderContext
+): Promise<Record<string, unknown>> {
+  const state = await resolvePlaceholders(cfg.state || '', placeholderCtx)
+  const details = await resolvePlaceholders(cfg.details || '', placeholderCtx)
+
+  const activity: Record<string, unknown> = {
+    type: 0, // PLAYING
+    name: cfg.name,
+  }
+
+  if (state) activity.state = state
+  if (details) activity.details = details
+
+  // Timestamps
+  const now = Date.now()
+  const rawUpdated = cfg.updatedAt
+  const baseTime = rawUpdated
+    ? new Date(rawUpdated as string).getTime()
+    : (placeholderCtx?.rpcStartedAt && !isNaN(placeholderCtx.rpcStartedAt) ? placeholderCtx.rpcStartedAt : now)
+  const safeBase = (!isNaN(baseTime) && baseTime <= now) ? Math.floor(baseTime) : now
+
+  if (cfg.startMinsAgo != null && cfg.startMinsAgo >= 0) {
+    const startMs = Math.floor(safeBase - (cfg.startMinsAgo * 60 * 1000))
+    activity.timestamps = { start: startMs }
+  }
+  if (cfg.endTotalMins != null && cfg.endTotalMins > 0) {
+    const startMs = (activity.timestamps as any)?.start ?? Math.floor(safeBase - ((cfg.startMinsAgo || 0) * 60 * 1000))
+    const endMs = Math.floor(startMs + (cfg.endTotalMins * 60 * 1000))
+    if (endMs > now) {
+      activity.timestamps = { ...(activity.timestamps as object), end: endMs }
+    }
+  }
+
+  // Party
+  if (cfg.partyMax != null && cfg.partyMax > 0) {
+    const party: Record<string, unknown> = { size: [cfg.partyCurrent ?? 0, cfg.partyMax] }
+    activity.party = party
+  }
+
+  // Assets — use the game's official icon as large_image by default
+  const assets: Record<string, string> = {}
+  const largeImg = cfg.largeImage || cfg.img
+  if (largeImg) assets.large_image = largeImg
+  if (cfg.largeText) assets.large_text = cfg.largeText
+  else if (cfg.name) assets.large_text = cfg.name
+  if (cfg.smallImage) assets.small_image = cfg.smallImage
+  if (cfg.smallText) assets.small_text = cfg.smallText
+  if (Object.keys(assets).length > 0) activity.assets = assets
+
+  // Buttons
+  const buttons: Array<{ label: string; url: string }> = []
+  const buttonUrls: string[] = []
+  if (cfg.button1Label && cfg.button1Url) {
+    buttons.push({ label: cfg.button1Label, url: cfg.button1Url })
+    buttonUrls.push(cfg.button1Url)
+  }
+  if (cfg.button2Label && cfg.button2Url) {
+    buttons.push({ label: cfg.button2Label, url: cfg.button2Url })
+    buttonUrls.push(cfg.button2Url)
+  }
+  if (buttons.length > 0) {
+    activity.buttons = buttons
+    activity.metadata = { button_urls: buttonUrls }
+  }
+
+  // CRITICAL: application_id = the game's real Discord app_id (spoofing)
+  activity.application_id = cfg.appId
 
   return activity
 }
@@ -143,10 +246,18 @@ export function buildCustomStatusActivity(
 
 /**
  * Build the full activities array for Discord Gateway OP 3.
- * Supports both Custom Status (type 4) AND Rich Presence Game/App Activity (type 0..5) simultaneously.
+ * Supports:
+ *   - Custom Status (type 4) — if statusEnabled
+ *   - Games RPC activity (type 0, game's app_id) — if gamesRpcEnabled (PRIORITY over normal RPC)
+ *   - Normal RPC activity (type 0, OAuth client_id) — if rpcEnabled and gamesRpc NOT active
+ *
+ * Games RPC and Normal RPC are NEVER both pushed simultaneously — Discord only shows
+ * one type-0 activity. Games RPC takes priority (more specific). Both have independent
+ * enable flags in the DB; the daemon picks which to display.
  */
 export async function buildPresenceActivities(options: {
   rpcConfig?: RpcConfig | null
+  gameActivity?: Record<string, unknown> | null
   customStatus?: string | null
   customStatusEmoji?: string | null
   placeholderCtx?: PlaceholderContext
@@ -155,7 +266,7 @@ export async function buildPresenceActivities(options: {
 }): Promise<Array<Record<string, unknown>>> {
   const activities: Array<Record<string, unknown>> = []
 
-  // 1. Custom status activity (type 4)
+  // 1. Custom status activity (type 4) — independent of RPC
   const customActivity = buildCustomStatusActivity(
     options.customStatus || null,
     options.customStatusEmoji || null
@@ -164,11 +275,16 @@ export async function buildPresenceActivities(options: {
     activities.push(customActivity)
   }
 
-  // 2. Rich Presence activity (type 0, etc.)
+  // 2. Games RPC activity (type 0, game's app_id) — PRIORITY over normal RPC
+  if (options.gameActivity) {
+    activities.push(options.gameActivity)
+  }
+
+  // 3. Normal RPC activity (type 0, OAuth client_id) — ONLY if no game activity
   const explicitPlatform = options.platform || options.rpcConfig?.platform
   const isVr = explicitPlatform === 'meta_quest' || (!!options.vrStatusActive && (!explicitPlatform || explicitPlatform === 'meta_quest'))
 
-  if (options.rpcConfig && options.rpcConfig.enabled !== false) {
+  if (!options.gameActivity && options.rpcConfig && options.rpcConfig.enabled !== false) {
     const ctx = options.placeholderCtx || {
       timezone: 'UTC',
       rpcStartedAt: Date.now(),
@@ -180,7 +296,6 @@ export async function buildPresenceActivities(options: {
         rpcActivity.state = 'In Virtual Reality'
       }
     }
-    // Activity Name is ALWAYS prioritized from custom NAME, falling back to platform name only when NAME is empty.
     rpcActivity.name = resolveRpcActivityName(options.rpcConfig?.name, isVr ? 'meta_quest' : explicitPlatform)
     activities.push(rpcActivity)
   }
