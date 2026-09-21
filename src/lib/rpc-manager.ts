@@ -533,6 +533,7 @@ export async function sendPresenceViaGateway(
               d: {
                 token: bearerToken,
                 properties,
+                intents: 0,
               },
             }
             ws.send(JSON.stringify(identify))
