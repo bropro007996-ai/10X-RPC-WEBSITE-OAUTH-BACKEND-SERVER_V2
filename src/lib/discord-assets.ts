@@ -151,14 +151,23 @@ export async function resolveImageToAssetKey(
     return trimmed
   }
 
-  // HTTPS URL — upload as asset
-  const asset = await uploadImageAsAsset(trimmed)
-  if (asset) {
-    return asset.key
+  // HTTPS URL — try uploading as a Discord app asset
+  try {
+    const asset = await uploadImageAsAsset(trimmed)
+    if (asset) {
+      return asset.key
+    }
+  } catch (e) {
+    console.error('[resolveImageToAssetKey] Upload failed:', e)
   }
 
-  // Upload failed — return null (omit, Discord shows app default icon)
-  return null
+  // Upload failed — fall back to mp:external format (may work on some gateway versions)
+  try {
+    const b64 = Buffer.from(trimmed).toString('base64url')
+    return `mp:external/${b64}`
+  } catch {
+    return null
+  }
 }
 
 function hashUrl(url: string): string {
