@@ -175,7 +175,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /debug — test fetch + asset listing (diagnostic)
+  // GET /debug — test fetch + asset listing + upload test (diagnostic)
   if (path === '/debug') {
     try {
       const appId = process.env.DISCORD_CLIENT_ID
@@ -183,6 +183,8 @@ const server = http.createServer(async (req, res) => {
       const hasFetch = typeof fetch !== 'undefined'
       let assetsCount = -1
       let fetchError = null
+      let uploadTestResult = null
+
       if (hasFetch && botToken) {
         try {
           const r = await fetch('https://discord.com/api/v9/applications/' + appId + '/assets', {
@@ -197,7 +199,63 @@ const server = http.createServer(async (req, res) => {
         } catch (e) {
           fetchError = e.message
         }
+
+        // Test uploading a small test image
+        try {
+          const testUrl = url.searchParams.get('testUrl') || 'https://cdn.discordapp.com/app-icons/1549299168562905148/d222fc6f259e8eeea6ba57b893bf3882.png'
+          uploadTestResult = { testUrl, steps: [] }
+
+          // Step 1: download image
+          const imgRes = await fetch(testUrl)
+          uploadTestResult.steps.push({ step: 'download', ok: imgRes.ok, status: imgRes.status, contentType: imgRes.headers.get('content-type') })
+          if (!imgRes.ok) throw new Error('download failed: ' + imgRes.status)
+          const imgBuf = Buffer.from(await imgRes.arrayBuffer())
+          uploadTestResult.steps.push({ step: 'buffer', size: imgBuf.length })
+
+          // Step 2: get upload URL
+          const uploadReqRes = await fetch('https://discord.com/api/v9/applications/' + appId + '/assets/upload', {
+            method: 'POST',
+            headers: { Authorization: 'Bot ' + botToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: 'debug_test.png', file_size: imgBuf.length, is_public: true })
+          })
+          uploadTestResult.steps.push({ step: 'getUploadUrl', ok: uploadReqRes.ok, status: uploadReqRes.status })
+          if (!uploadReqRes.ok) {
+            const errBody = await uploadReqRes.text()
+            uploadTestResult.steps.push({ step: 'getUploadUrl_error', body: errBody.substring(0, 200) })
+            throw new Error('getUploadUrl failed: ' + uploadReqRes.status)
+          }
+          const { upload_url, upload_filename } = await uploadReqRes.json()
+          uploadTestResult.steps.push({ step: 'gotUploadUrl', hasUrl: !!upload_url, hasFilename: !!upload_filename })
+
+          // Step 3: upload to GCS
+          const putRes = await fetch(upload_url, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'image/png' },
+            body: imgBuf
+          })
+          uploadTestResult.steps.push({ step: 'uploadToGCS', ok: putRes.ok, status: putRes.status })
+
+          // Step 4: create asset
+          const createRes = await fetch('https://discord.com/api/v9/applications/' + appId + '/assets', {
+            method: 'POST',
+            headers: { Authorization: 'Bot ' + botToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'debug_test_' + Date.now(), upload_filename })
+          })
+          uploadTestResult.steps.push({ step: 'createAsset', ok: createRes.ok, status: createRes.status })
+          if (createRes.ok) {
+            const asset = await createRes.json()
+            uploadTestResult.steps.push({ step: 'assetCreated', key: asset.key, assetId: asset.asset_id })
+            uploadTestResult.success = true
+            uploadTestResult.key = asset.key
+          } else {
+            const errBody = await createRes.text()
+            uploadTestResult.steps.push({ step: 'createAsset_error', body: errBody.substring(0, 200) })
+          }
+        } catch (uploadErr) {
+          uploadTestResult.error = uploadErr.message
+        }
       }
+
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
       res.end(JSON.stringify({
         fetch_available: hasFetch,
@@ -205,9 +263,10 @@ const server = http.createServer(async (req, res) => {
         client_id: appId,
         assets_count: assetsCount,
         fetch_error: fetchError,
+        upload_test: uploadTestResult,
         node_version: process.version,
         uptime: Math.floor(process.uptime())
-      }))
+      }, null, 2))
       return
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' })
