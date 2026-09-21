@@ -87,6 +87,48 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+
+  // GET /debug — test fetch + asset listing (diagnostic)
+  if (path === '/debug') {
+    try {
+      const appId = process.env.DISCORD_CLIENT_ID
+      const botToken = process.env.DISCORD_BOT_TOKEN
+      const hasFetch = typeof fetch !== 'undefined'
+      let assetsCount = -1
+      let fetchError = null
+      if (hasFetch && botToken) {
+        try {
+          const r = await fetch('https://discord.com/api/v9/applications/' + appId + '/assets', {
+            headers: { Authorization: 'Bot ' + botToken }
+          })
+          if (r.ok) {
+            const d = await r.json()
+            assetsCount = d.length
+          } else {
+            fetchError = 'HTTP ' + r.status
+          }
+        } catch (e) {
+          fetchError = e.message
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({
+        fetch_available: hasFetch,
+        bot_token_set: !!botToken,
+        client_id: appId,
+        assets_count: assetsCount,
+        fetch_error: fetchError,
+        node_version: process.version,
+        uptime: Math.floor(process.uptime())
+      }))
+      return
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: e.message }))
+      return
+    }
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ error: 'not_found' }))
 })
