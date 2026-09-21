@@ -1,11 +1,11 @@
-// 10X RPC — Prisma schema
-// Uses PostgreSQL (Neon) in production. Falls back to SQLite if DATABASE_URL
-// starts with "file:". The provider is resolved by postinstall script + the
-// build script that runs `prisma generate` with the correct provider.
+// 10X RPC — Production Prisma schema (PostgreSQL / Neon)
+// Swap this over prisma/schema.prisma before deploying to Vercel + Render.
+// Run:  bash scripts/use-postgres.sh
+// Then: bun run db:push   (with DATABASE_URL + DATABASE_URL_UNPOOLED set to Neon)
 
 generator client {
-  provider = "prisma-client-js"
-  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x", "debian-openssl-1.1.x", "rhel-openssl-3.0.x", "rhel-openssl-1.1.x"]
+  provider        = "prisma-client-js"
+  binaryTargets   = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x", "debian-openssl-1.1.x", "rhel-openssl-3.0.x", "rhel-openssl-1.1.x"]
 }
 
 datasource db {
@@ -24,12 +24,12 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  sessions       Session[]
-  rpcConfigs     RpcConfig[]
-  gameConfigs    GameConfig[]
-  rotatorPresets RotatorPreset[]
-  globalConfig   GlobalConfig?
-  trial          Trial?
+  sessions         Session[]
+  rpcConfigs       RpcConfig[]
+  gameRpcConfigs   GameRpcConfig[]
+  rotatorPresets   RotatorPreset[]
+  globalConfig     GlobalConfig?
+  trial            Trial?
 }
 
 model Session {
@@ -42,40 +42,41 @@ model Session {
 
   // Discord OAuth tokens (stored server-side only, never sent to client)
   discordAccessToken    String?
-  discordRefreshToken  String?
+  discordRefreshToken   String?
   discordTokenExpiresAt DateTime?
 
   // Status & RPC state (completely independent)
-  statusEnabled   Boolean  @default(false)
-  rpcEnabled      Boolean  @default(false)
-  gatewayReady    Boolean  @default(false)
-  userStatus      String   @default("online")
-  customStatus    String?
-  customStatusEmoji String?
-  statusPlatform  String   @default("mobile")
+  statusEnabled       Boolean  @default(false)
+  rpcEnabled          Boolean  @default(false)
+  gamesRpcEnabled     Boolean  @default(false)
+  gatewayReady        Boolean  @default(false)
+  userStatus         String   @default("online")
+  customStatus       String?
+  customStatusEmoji  String?
+  statusPlatform     String   @default("mobile")
   lastPresenceUpdate DateTime?
 
   // VR / Meta Quest state
-  vrStatusActive      Boolean  @default(false)
-  vrSessionToken      String?
-  vrMetaAccessToken   String?
-  vrMetaRefreshToken  String?
-  vrMetaTokenExpires  DateTime?
+  vrStatusActive     Boolean  @default(false)
+  vrSessionToken     String?
+  vrMetaAccessToken  String?
+  vrMetaRefreshToken String?
+  vrMetaTokenExpires DateTime?
 
   // Smart sleep timer
-  sleepTimerActive   Boolean  @default(false)
-  sleepTimerEndsAt   DateTime?
+  sleepTimerActive Boolean  @default(false)
+  sleepTimerEndsAt DateTime?
 
   @@index([userId])
 }
 
 model RpcConfig {
-  id           String  @id @default(cuid())
+  id           String   @id @default(cuid())
   userId       String
-  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name         String  @default("10X RPC")
-  type         String  @default("PLAYING") // PLAYING / STREAMING / LISTENING / WATCHING / COMPETING
-  platform     String  @default("desktop") // desktop / xbox / ps4 / ps5 / samsung / ios / android / embedded / meta_quest
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String   @default("10X RPC")
+  type         String   @default("PLAYING")
+  platform     String   @default("desktop")
   state        String?
   details      String?
   largeImage   String?
@@ -90,80 +91,76 @@ model RpcConfig {
   partyMax     Int?
   partyId      String?
   partySecret  String?
-  startMinsAgo Int     @default(0)
+  startMinsAgo Int      @default(0)
   endTotalMins Int?
-  enabled      Boolean @default(false)
+  enabled      Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@index([userId])
 }
 
-model GameConfig {
-  id           String  @id @default(cuid())
-  userId       String
-  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  gameSlug     String // e.g. "minecraft", "genshin", "gta-v", "gtaiii"
-  gameName     String
-  enabled      Boolean @default(false)
-  platform     String  @default("desktop")
-  state        String?
-  details      String?
-  largeImage   String?
-  largeText    String?
-  smallImage   String?
-  smallText    String?
-  button1Label String?
+// Games RPC — completely separate from Normal RPC.
+// Uses a real game's app_id (from spoofGames) as the Discord application_id,
+// so Discord displays the game's official icon and name.
+model GameRpcConfig {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSlug      String   @default("minecraft")
+  enabled       Boolean  @default(false)
+  state         String?
+  details       String?
+  largeImage    String?
+  largeText     String?
+  smallImage    String?
+  smallText     String?
+  button1Label  String?
   button1Url   String?
-  button2Label String?
-  button2Url   String?
-  partyCurrent Int     @default(1)
-  partyMax     Int     @default(5)
-  partyId      String?
-  partySecret  String?
-  startMinsAgo Int     @default(0)
-  endTotalMins Int?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([userId, gameSlug])
-  @@index([userId])
+  button2Label  String?
+  button2Url    String?
+  partyCurrent  Int      @default(1)
+  partyMax      Int      @default(5)
+  startMinsAgo  Int      @default(0)
+  endTotalMins  Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model RotatorPreset {
-  id        String  @id @default(cuid())
-  userId    String
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  emoji     String?
-  text      String
-  durationMins Int @default(5) // how long this status stays before rotating
-  order     Int     @default(0)
-  enabled   Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji        String?
+  text         String
+  durationMins Int      @default(5)
+  order        Int      @default(0)
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
 }
 
 model GlobalConfig {
-  id        String  @id @default(cuid())
-  userId    String  @unique
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  city      String?
-  timezone  String  @default("Asia/Calcutta")
-  rotatorEnabled Boolean @default(false)
-  rotatorIntervalMins Int @default(5)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city                String?
+  timezone            String   @default("Asia/Calcutta")
+  rotatorEnabled      Boolean  @default(false)
+  rotatorIntervalMins Int      @default(5)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }
 
 model Trial {
-  id        String  @id @default(cuid())
-  userId    String  @unique
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   startsAt  DateTime @default(now())
   endsAt    DateTime
-  active    Boolean @default(true)
+  active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
   @@index([userId])
