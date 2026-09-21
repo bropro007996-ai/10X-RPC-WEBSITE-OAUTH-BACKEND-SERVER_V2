@@ -2,6 +2,7 @@
 require('dotenv').config()
 const { spawn, execSync } = require('child_process')
 const http = require('http')
+const https = require('https')
 
 const PORT = process.env.SERVER_PORT || process.env.PORT || 3000
 
@@ -79,7 +80,7 @@ if (KEEPALIVE_URL) {
   console.log(`[10X RPC KeepAlive] Pinging ${KEEPALIVE_URL} every 4 min (keeps Neon + Render warm)`)
 
   function pingKeepAlive() {
-    const req = http.get(KEEPALIVE_URL, { timeout: 15000 }, (res) => {
+    const req = https.get(KEEPALIVE_URL, { timeout: 15000 }, (res) => {
       let body = ''
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => {
