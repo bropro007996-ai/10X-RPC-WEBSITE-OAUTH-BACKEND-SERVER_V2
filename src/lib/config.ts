@@ -14,8 +14,9 @@ export const CONFIG = {
     authorizeUrl: 'https://discord.com/api/oauth2/authorize',
     tokenUrl: 'https://discord.com/api/oauth2/token',
     apiBase: 'https://discord.com/api/v9',
-    // Gaming SDK gateway — accepts OAuth2 user tokens with sdk.social_layer_presence scope.
-    gatewayUrl: 'wss://gateway.gaming-sdk.com/?v=10&encoding=json',
+    // Main Discord gateway — supports app assets (large_image) for user OAuth tokens.
+    // The Gaming SDK gateway (gateway.gaming-sdk.com) does NOT support custom images.
+    gatewayUrl: process.env.DISCORD_GATEWAY_URL || 'wss://gateway.discord.gg/?v=10&encoding=json',
     serverId: process.env.DISCORD_SERVER_ID || '1549302358926823496',
     inviteUrl: process.env.DISCORD_INVITE_URL || 'https://discord.gg/jr27qeCZU',
   },
