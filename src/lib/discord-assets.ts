@@ -207,11 +207,12 @@ async function setAssetPublic(key: string): Promise<boolean> {
  * Convert an image reference to a Discord-acceptable large_image value.
  *
  * Strategy (in priority order):
- *   1. If it's already a Discord asset key (no http://), return as-is
- *   2. If it's an HTTPS URL, upload it as a Discord app asset and return the key
+ *   1. If it's already a Discord asset ID/key (no http://), return as-is
+ *   2. If it's an HTTPS URL, upload it as a Discord app asset and return the ASSET ID (numeric)
  *   3. If upload fails, return null (omit large_image — Discord shows app icon)
  *
- * This REPLACES the mp:external approach (which doesn't work on the Gaming SDK gateway).
+ * CRITICAL: Discord's gateway accepts the ASSET ID (numeric string), NOT the asset key.
+ * Using the key causes Discord to silently strip the assets block (blank image).
  */
 export async function resolveImageToAssetKey(
   image: string | null | undefined
@@ -220,7 +221,7 @@ export async function resolveImageToAssetKey(
   const trimmed = image.trim()
   if (!trimmed) return null
 
-  // Already a Discord asset key or mp:external format
+  // Already a Discord asset ID/key or mp:external format
   if (!/^https?:\/\//i.test(trimmed)) {
     return trimmed
   }
@@ -229,7 +230,9 @@ export async function resolveImageToAssetKey(
   try {
     const asset = await uploadImageAsAsset(trimmed)
     if (asset) {
-      return asset.key
+      // Return the ASSET ID (numeric string) — Discord's gateway requires this, not the key.
+      // Using the key causes Discord to silently strip the assets block (image won't show).
+      return asset.assetId
     }
   } catch (e) {
     console.error('[resolveImageToAssetKey] Upload failed:', e)
