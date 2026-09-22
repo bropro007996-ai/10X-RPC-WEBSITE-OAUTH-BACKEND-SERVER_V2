@@ -130,32 +130,21 @@ export async function buildActivityPayload(
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
-  // Buttons (max 2) — STRICTLY OPTIONAL.
-  // Only include a button if BOTH label (non-empty after trim) AND URL (valid HTTPS) are present.
-  // Discord silently drops the ENTIRE activity if buttons are malformed, so we validate strictly.
-  // If no valid buttons, the buttons/metadata fields are omitted entirely — the RPC always shows.
-  const buttons: Array<{ label: string; url: string }> = []
-  const buttonUrls: string[] = []
-  const b1Label = (cfg.button1Label || '').trim()
-  const b1Url = (cfg.button1Url || '').trim()
-  const b2Label = (cfg.button2Label || '').trim()
-  const b2Url = (cfg.button2Url || '').trim()
-  // Discord requires HTTPS URLs for button links
-  if (b1Label && b1Url && /^https?:\/\//i.test(b1Url)) {
-    buttons.push({ label: b1Label, url: b1Url })
-    buttonUrls.push(b1Url)
-  }
-  if (b2Label && b2Url && /^https?:\/\//i.test(b2Url)) {
-    buttons.push({ label: b2Label, url: b2Url })
-    buttonUrls.push(b2Url)
-  }
-  // Only attach buttons + metadata if at least one valid button exists.
-  // NEVER attach an empty buttons array or metadata with empty button_urls —
-  // Discord rejects the entire activity if these fields are malformed.
-  if (buttons.length > 0) {
-    activity.buttons = buttons
-    activity.metadata = { button_urls: buttonUrls }
-  }
+  // Buttons — DISABLED for user OAuth2 tokens.
+  // Discord's gateway silently drops the ENTIRE activity (not just the buttons)
+  // when the `buttons` or `metadata.button_urls` fields are present in an OP 3
+  // sent via a user OAuth2 token. This is a confirmed Discord platform limitation:
+  //   - OP 3 WITHOUT buttons → activity shows ✅
+  //   - OP 3 WITH valid buttons → activity silently dropped ❌ (no echo, no error)
+  //
+  // Button labels/URLs are still stored in the DB (rpcConfig.button1Label etc.)
+  // for future use if Discord adds support. But they are NOT sent to Discord.
+  // This ensures the RPC ALWAYS displays when enabled.
+  //
+  // const buttons: Array<{ label: string; url: string }> = []
+  // const buttonUrls: string[] = []
+  // ... (validation code removed — buttons are never attached)
+  // DO NOT set activity.buttons or activity.metadata.button_urls
 
   // Platform — send-side field for headless/embedded sessions
   if (cfg.platform) activity.platform = cfg.platform
@@ -256,27 +245,10 @@ export async function buildGameActivityPayload(
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
-  // Buttons — STRICTLY OPTIONAL (same validation as Normal RPC).
-  // Only include if BOTH label (non-empty after trim) AND URL (valid HTTPS) are present.
-  // If no valid buttons, omit the buttons/metadata fields entirely.
-  const buttons: Array<{ label: string; url: string }> = []
-  const buttonUrls: string[] = []
-  const gb1Label = (cfg.button1Label || '').trim()
-  const gb1Url = (cfg.button1Url || '').trim()
-  const gb2Label = (cfg.button2Label || '').trim()
-  const gb2Url = (cfg.button2Url || '').trim()
-  if (gb1Label && gb1Url && /^https?:\/\//i.test(gb1Url)) {
-    buttons.push({ label: gb1Label, url: gb1Url })
-    buttonUrls.push(gb1Url)
-  }
-  if (gb2Label && gb2Url && /^https?:\/\//i.test(gb2Url)) {
-    buttons.push({ label: gb2Label, url: gb2Url })
-    buttonUrls.push(gb2Url)
-  }
-  if (buttons.length > 0) {
-    activity.buttons = buttons
-    activity.metadata = { button_urls: buttonUrls }
-  }
+  // Buttons — DISABLED for user OAuth2 tokens (same as Normal RPC).
+  // Discord silently drops the ENTIRE activity when buttons/metadata are present.
+  // See the comment in buildActivityPayload for details.
+  // DO NOT set activity.buttons or activity.metadata.button_urls
 
   // CRITICAL: application_id = the game's real Discord app_id (spoofing)
   activity.application_id = cfg.appId
