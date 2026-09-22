@@ -90,6 +90,33 @@ const server = http.createServer(async (req, res) => {
 
 
 
+
+  // POST /force-push?userId=xxx — forces the daemon to reconnect + push presence immediately
+  if (path === '/force-push' && req.method === 'POST') {
+    try {
+      const userId = url.searchParams.get('userId')
+      if (!userId) {
+        res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify({ ok: false, error: 'missing userId' }))
+        return
+      }
+      const d = await getDaemon()
+      // First, disconnect the user's existing socket (forces a fresh reconnect)
+      try { d.disconnectUser(userId) } catch {}
+      // Wait a moment for the disconnect to complete
+      await new Promise(r => setTimeout(r, 1000))
+      // Now syncUser — this will open a fresh socket + IDENTIFY + push presence on READY
+      const result = await d.syncUser(userId)
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ ok: result.ok, method: result.method, message: result.message }))
+      return
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ error: e.message }))
+      return
+    }
+  }
+
   // GET /test-ws — tests if the daemon can reach gateway.discord.gg
   if (path === '/test-ws') {
     try {
