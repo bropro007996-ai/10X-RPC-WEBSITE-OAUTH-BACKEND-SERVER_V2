@@ -175,6 +175,22 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+
+  // GET /debug-daemon — shows the daemon's internal state (sockets, connections)
+  if (path === '/debug-daemon') {
+    try {
+      const d = await getDaemon()
+      const status = d.getStatus ? d.getStatus() : { error: 'getStatus not available' }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify(status, null, 2))
+      return
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ error: e.message }))
+      return
+    }
+  }
+
   // GET /debug — test fetch + asset listing + upload test (diagnostic)
   if (path === '/debug') {
     try {
