@@ -89,6 +89,59 @@ const server = http.createServer(async (req, res) => {
 
 
 
+
+  // GET /test-ws — tests if the daemon can reach gateway.discord.gg
+  if (path === '/test-ws') {
+    try {
+      const WebSocket = require('ws')
+      const gatewayUrl = 'wss://gateway.discord.gg/?v=10&encoding=json'
+      const ws = new WebSocket(gatewayUrl)
+      let result = { gatewayUrl, steps: [] }
+      
+      const timeout = setTimeout(() => {
+        result.steps.push({ step: 'timeout', message: 'No HELLO within 10s' })
+        try { ws.close() } catch {}
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify(result, null, 2))
+      }, 10000)
+      
+      ws.on('open', () => {
+        result.steps.push({ step: 'open', ok: true })
+      })
+      
+      ws.on('message', (data) => {
+        try {
+          const pl = JSON.parse(data.toString())
+          if (pl.op === 10) {
+            clearTimeout(timeout)
+            result.steps.push({ step: 'HELLO', ok: true, heartbeat_interval: pl.d.heartbeat_interval })
+            result.success = true
+            try { ws.close() } catch {}
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+            res.end(JSON.stringify(result, null, 2))
+          }
+        } catch {}
+      })
+      
+      ws.on('error', (err) => {
+        clearTimeout(timeout)
+        result.steps.push({ step: 'error', message: err.message })
+        result.success = false
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify(result, null, 2))
+      })
+      
+      ws.on('close', (code) => {
+        result.steps.push({ step: 'close', code })
+      })
+      return
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ error: e.message }))
+      return
+    }
+  }
+
   // GET /debug-payload?userId=xxx — returns the exact OP 3 payload the daemon would send
   if (path === '/debug-payload') {
     try {
