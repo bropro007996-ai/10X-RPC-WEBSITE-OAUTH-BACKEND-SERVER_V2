@@ -495,11 +495,14 @@ export class RpcDaemon {
       const isRpcActive = !!(session.rpcEnabled && rpcConfig?.enabled)
       const isStatusActive = !!session.statusEnabled
 
-      const activePlatform = isStatusActive
-        ? (session.statusPlatform || 'mobile')
-        : (isRpcActive ? (rpcConfig?.platform || 'desktop') : (session.statusPlatform || 'mobile'))
+      // Determine the IDENTIFY platform. When RPC is active, use the RPC's platform
+      // (e.g. desktop) so Discord accepts the type=0 activity. Using statusPlatform
+      // (e.g. meta_quest) causes Discord to reject desktop RPC activities.
+      const activePlatform = isRpcActive
+        ? (rpcConfig?.platform || 'desktop')
+        : (isStatusActive ? (session.statusPlatform || 'mobile') : (session.statusPlatform || 'mobile'))
 
-      const isQuest = activePlatform === 'meta_quest' || (isStatusActive && session.vrStatusActive)
+      const isQuest = activePlatform === 'meta_quest' || (isStatusActive && session.vrStatusActive && !isRpcActive)
       const targetPlatform = isQuest ? 'meta_quest' : activePlatform
       userSock.platform = targetPlatform
 
@@ -754,9 +757,11 @@ export class RpcDaemon {
       }
     }
 
-    const activePlatform = isStatusActive
-      ? (session.statusPlatform || 'mobile')
-      : (isGamesRpcActive ? 'desktop' : (isRpcActive ? (rpcConfig?.platform || 'desktop') : (session.statusPlatform || 'mobile')))
+    // Use RPC platform when RPC is active (so Discord accepts the type=0 activity).
+    // Using statusPlatform (e.g. meta_quest) causes Discord to reject desktop RPC activities.
+    const activePlatform = isRpcActive
+      ? (rpcConfig?.platform || 'desktop')
+      : (isGamesRpcActive ? 'desktop' : (isStatusActive ? (session.statusPlatform || 'mobile') : (session.statusPlatform || 'mobile')))
     userSock.platform = activePlatform === 'meta_quest' ? 'meta_quest' : activePlatform
 
     const activities = await buildPresenceActivities({
