@@ -313,7 +313,8 @@ export class RpcDaemon {
    */
   public async stopUserRpc(userId: string): Promise<void> {
     const session = await db.session.findFirst({
-      where: { userId },
+      where: { userId, discordAccessToken: { not: null }, expiresAt: { gt: new Date() } },
+      orderBy: { discordTokenExpiresAt: 'desc' },
     })
     if (!session || !session.discordAccessToken) return
 
@@ -460,7 +461,8 @@ export class RpcDaemon {
 
     try {
       const session = await db.session.findFirst({
-        where: { userId },
+        where: { userId, discordAccessToken: { not: null }, expiresAt: { gt: new Date() } },
+        orderBy: { discordTokenExpiresAt: 'desc' },
       })
       if (!session || !session.discordAccessToken) {
         userSock.isConnecting = false
