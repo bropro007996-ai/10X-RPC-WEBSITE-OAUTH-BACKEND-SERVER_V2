@@ -130,30 +130,32 @@ export async function buildActivityPayload(
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
-  // Buttons — PARTIAL support for user OAuth2 tokens.
-  // Tested 4 variations against gateway.discord.gg:
-  //   - `buttons` array present → Discord silently drops the ENTIRE activity ❌
-  //   - `metadata.button_urls` only (no `buttons` array) → activity shows ✅
-  //     (Discord strips metadata from the echo, but the activity is NOT dropped)
+  // Buttons — CORRECT Discord format per the Rich Presence SDK:
+  //   `buttons`: array of STRINGS (label names), NOT objects
+  //   `metadata.button_urls`: array of URL strings (parallel to buttons)
   //
-  // So: we include `metadata.button_urls` (valid HTTPS URLs only) but NEVER the
-  // `buttons` array. The RPC always displays. If Discord ever adds button rendering
-  // for user OAuth2 tokens, the buttons will appear automatically from the metadata.
+  // Previous bug: we sent `buttons: [{label, url}]` (objects) — Discord validates
+  // the format and silently drops the ENTIRE activity when buttons contains objects
+  // instead of strings. The correct format is:
+  //   buttons: ["Join", "Website"]
+  //   metadata: { button_urls: ["https://...", "https://..."] }
+  const buttonLabels: string[] = []
   const buttonUrls: string[] = []
   const b1Label = (cfg.button1Label || '').trim()
   const b1Url = (cfg.button1Url || '').trim()
   const b2Label = (cfg.button2Label || '').trim()
   const b2Url = (cfg.button2Url || '').trim()
   if (b1Label && b1Url && /^https?:\/\//i.test(b1Url)) {
+    buttonLabels.push(b1Label)
     buttonUrls.push(b1Url)
   }
   if (b2Label && b2Url && /^https?:\/\//i.test(b2Url)) {
+    buttonLabels.push(b2Label)
     buttonUrls.push(b2Url)
   }
-  // Only attach metadata if at least one valid button URL exists.
-  // NEVER attach the `buttons` array — it causes Discord to drop the entire activity.
-  if (buttonUrls.length > 0) {
-    activity.metadata = { button_urls: buttonUrls }
+  if (buttonLabels.length > 0) {
+    activity.buttons = buttonLabels        // array of STRINGS (labels)
+    activity.metadata = { button_urls: buttonUrls }  // array of URL strings
   }
 
   // Platform — send-side field for headless/embedded sessions
@@ -255,17 +257,18 @@ export async function buildGameActivityPayload(
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
-  // Buttons — PARTIAL support (same as Normal RPC).
-  // Include metadata.button_urls but NEVER the buttons array.
-  // See the comment in buildActivityPayload for details.
+  // Buttons — CORRECT Discord format (same as Normal RPC).
+  // buttons = array of STRINGS (labels), metadata.button_urls = array of URL strings.
+  const gButtonLabels: string[] = []
   const gButtonUrls: string[] = []
   const gb1Label = (cfg.button1Label || '').trim()
   const gb1Url = (cfg.button1Url || '').trim()
   const gb2Label = (cfg.button2Label || '').trim()
   const gb2Url = (cfg.button2Url || '').trim()
-  if (gb1Label && gb1Url && /^https?:\/\//i.test(gb1Url)) gButtonUrls.push(gb1Url)
-  if (gb2Label && gb2Url && /^https?:\/\//i.test(gb2Url)) gButtonUrls.push(gb2Url)
-  if (gButtonUrls.length > 0) {
+  if (gb1Label && gb1Url && /^https?:\/\//i.test(gb1Url)) { gButtonLabels.push(gb1Label); gButtonUrls.push(gb1Url) }
+  if (gb2Label && gb2Url && /^https?:\/\//i.test(gb2Url)) { gButtonLabels.push(gb2Label); gButtonUrls.push(gb2Url) }
+  if (gButtonLabels.length > 0) {
+    activity.buttons = gButtonLabels
     activity.metadata = { button_urls: gButtonUrls }
   }
 
