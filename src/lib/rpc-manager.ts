@@ -8,6 +8,37 @@ import type { RpcConfig } from './api-client'
 import type { PlaceholderContext } from './placeholders'
 import { resolvePlaceholders } from './placeholders'
 import { resolveRpcActivityName } from './constants'
+import { resolveImageToAssetKey } from './discord-assets'
+
+/**
+ * Convert an image reference to Discord's expected format.
+ *
+ * Discord's `large_image` / `small_image` fields accept:
+ *   1. A Discord asset key (uploaded via Developer Portal) — returned as-is
+ *   2. `mp:external/<base64url>` for external images — HTTPS URLs are encoded
+ *   3. If omitted entirely, Discord shows the app's default icon based on application_id
+ *
+ * Raw HTTPS URLs are NOT accepted — Discord silently drops them, causing the image
+ * to not appear. This helper converts HTTPS URLs to the mp:external format.
+ */
+function toDiscordImage(image: string | null | undefined): string | null {
+  if (!image) return null
+  const trimmed = image.trim()
+  if (!trimmed) return null
+  // Already a Discord asset key or mp:external format
+  if (trimmed.startsWith('mp:') || trimmed.startsWith('spotify:')) return trimmed
+  // HTTPS URL → convert to mp:external/<base64url>
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const b64 = Buffer.from(trimmed).toString('base64url')
+      return `mp:external/${b64}`
+    } catch {
+      return null
+    }
+  }
+  // Otherwise it's a Discord asset key — return as-is
+  return trimmed
+}
 
 // Activity types mapped to Discord's numeric values
 export const ACTIVITY_TYPE_MAP: Record<string, number> = {
@@ -33,7 +64,8 @@ export interface PresenceResult {
  */
 export async function buildActivityPayload(
   cfg: RpcConfig,
-  placeholderCtx: PlaceholderContext
+  placeholderCtx: PlaceholderContext,
+  applicationIdOverride?: string
 ): Promise<object> {
   const state = await resolvePlaceholders(cfg.state || '', placeholderCtx)
   const details = await resolvePlaceholders(cfg.details || '', placeholderCtx)
@@ -86,36 +118,162 @@ export async function buildActivityPayload(
     activity.party = party
   }
 
-  // Assets (images)
+  // Assets (images) — upload custom images to Discord app as assets (returns asset key)
+  // Raw HTTPS URLs and mp:external/ do NOT work on the Gaming SDK gateway — the image
+  // is silently dropped. We upload the image via the bot token and use the asset key.
   const assets: Record<string, string> = {}
-  if (cfg.largeImage) assets.large_image = cfg.largeImage
+  const largeImg = await resolveImageToAssetKey(cfg.largeImage)
+  if (largeImg) assets.large_image = largeImg
   if (cfg.largeText) assets.large_text = cfg.largeText
-  if (cfg.smallImage) assets.small_image = cfg.smallImage
+  const smallImg = await resolveImageToAssetKey(cfg.smallImage)
+  if (smallImg) assets.small_image = smallImg
   if (cfg.smallText) assets.small_text = cfg.smallText
   if (Object.keys(assets).length > 0) activity.assets = assets
 
-  // Buttons (max 2)
-  const buttons: Array<{ label: string; url: string }> = []
+  // Buttons — CORRECT Discord format per the Rich Presence SDK:
+  //   `buttons`: array of STRINGS (label names), NOT objects
+  //   `metadata.button_urls`: array of URL strings (parallel to buttons)
+  //
+  // Previous bug: we sent `buttons: [{label, url}]` (objects) — Discord validates
+  // the format and silently drops the ENTIRE activity when buttons contains objects
+  // instead of strings. The correct format is:
+  //   buttons: ["Join", "Website"]
+  //   metadata: { button_urls: ["https://...", "https://..."] }
+  const buttonLabels: string[] = []
   const buttonUrls: string[] = []
-  if (cfg.button1Label && cfg.button1Url) {
-    buttons.push({ label: cfg.button1Label, url: cfg.button1Url })
-    buttonUrls.push(cfg.button1Url)
+  const b1Label = (cfg.button1Label || '').trim()
+  const b1Url = (cfg.button1Url || '').trim()
+  const b2Label = (cfg.button2Label || '').trim()
+  const b2Url = (cfg.button2Url || '').trim()
+  if (b1Label && b1Url && /^https?:\/\//i.test(b1Url)) {
+    buttonLabels.push(b1Label)
+    buttonUrls.push(b1Url)
   }
-  if (cfg.button2Label && cfg.button2Url) {
-    buttons.push({ label: cfg.button2Label, url: cfg.button2Url })
-    buttonUrls.push(cfg.button2Url)
+  if (b2Label && b2Url && /^https?:\/\//i.test(b2Url)) {
+    buttonLabels.push(b2Label)
+    buttonUrls.push(b2Url)
   }
-  if (buttons.length > 0) {
-    activity.buttons = buttons
-    activity.metadata = { button_urls: buttonUrls }
+  if (buttonLabels.length > 0) {
+    activity.buttons = buttonLabels        // array of STRINGS (labels)
+    activity.metadata = { button_urls: buttonUrls }  // array of URL strings
   }
 
   // Platform — send-side field for headless/embedded sessions
   if (cfg.platform) activity.platform = cfg.platform
 
-  // Application ID — required for Discord to accept the activity
-  // Use the Discord client ID as the application ID
-  activity.application_id = CONFIG.discord.clientId
+  // Application ID — required for Discord to accept the activity.
+  // Normal RPC uses CONFIG.discord.clientId (the OAuth app).
+  // Games RPC overrides this with a real game's app_id (spoofing).
+  activity.application_id = applicationIdOverride || CONFIG.discord.clientId
+
+  return activity
+}
+
+/**
+ * Build a Games RPC activity payload.
+ * Uses the game's real Discord app_id as application_id — this is what makes
+ * Discord display the game's official icon and name (spoofing).
+ *
+ * SEPARATE from buildActivityPayload (Normal RPC) — different application_id,
+ * different config source (GameRpcConfig vs RpcConfig), never shared.
+ */
+export async function buildGameActivityPayload(
+  cfg: {
+    gameSlug: string
+    name: string
+    appId: string
+    img: string
+    state?: string | null
+    details?: string | null
+    largeImage?: string | null
+    largeText?: string | null
+    smallImage?: string | null
+    smallText?: string | null
+    button1Label?: string | null
+    button1Url?: string | null
+    button2Label?: string | null
+    button2Url?: string | null
+    partyCurrent?: number | null
+    partyMax?: number | null
+    startMinsAgo?: number
+    endTotalMins?: number | null
+    updatedAt?: string | Date
+  },
+  placeholderCtx: PlaceholderContext
+): Promise<Record<string, unknown>> {
+  const state = await resolvePlaceholders(cfg.state || '', placeholderCtx)
+  const details = await resolvePlaceholders(cfg.details || '', placeholderCtx)
+
+  const activity: Record<string, unknown> = {
+    type: 0, // PLAYING
+    name: cfg.name,
+  }
+
+  if (state) activity.state = state
+  if (details) activity.details = details
+
+  // Timestamps
+  const now = Date.now()
+  const rawUpdated = cfg.updatedAt
+  const baseTime = rawUpdated
+    ? new Date(rawUpdated as string).getTime()
+    : (placeholderCtx?.rpcStartedAt && !isNaN(placeholderCtx.rpcStartedAt) ? placeholderCtx.rpcStartedAt : now)
+  const safeBase = (!isNaN(baseTime) && baseTime <= now) ? Math.floor(baseTime) : now
+
+  if (cfg.startMinsAgo != null && cfg.startMinsAgo >= 0) {
+    const startMs = Math.floor(safeBase - (cfg.startMinsAgo * 60 * 1000))
+    activity.timestamps = { start: startMs }
+  }
+  if (cfg.endTotalMins != null && cfg.endTotalMins > 0) {
+    const startMs = (activity.timestamps as any)?.start ?? Math.floor(safeBase - ((cfg.startMinsAgo || 0) * 60 * 1000))
+    const endMs = Math.floor(startMs + (cfg.endTotalMins * 60 * 1000))
+    if (endMs > now) {
+      activity.timestamps = { ...(activity.timestamps as object), end: endMs }
+    }
+  }
+
+  // Party
+  if (cfg.partyMax != null && cfg.partyMax > 0) {
+    const party: Record<string, unknown> = { size: [cfg.partyCurrent ?? 0, cfg.partyMax] }
+    activity.party = party
+  }
+
+  // Assets
+  // For spoofed games (application_id = game's app_id), if no custom image is provided,
+  // OMIT large_image entirely — Discord shows the game's official icon via application_id.
+  // If a custom image IS provided, upload it as a Discord app asset (returns key) —
+  // raw HTTPS URLs and mp:external/ do NOT work on the Gaming SDK gateway.
+  const assets: Record<string, string> = {}
+  if (cfg.largeImage) {
+    const largeKey = await resolveImageToAssetKey(cfg.largeImage)
+    if (largeKey) assets.large_image = largeKey
+  }
+  if (cfg.largeText) assets.large_text = cfg.largeText
+  else if (cfg.name) assets.large_text = cfg.name
+  if (cfg.smallImage) {
+    const smallKey = await resolveImageToAssetKey(cfg.smallImage)
+    if (smallKey) assets.small_image = smallKey
+  }
+  if (cfg.smallText) assets.small_text = cfg.smallText
+  if (Object.keys(assets).length > 0) activity.assets = assets
+
+  // Buttons — CORRECT Discord format (same as Normal RPC).
+  // buttons = array of STRINGS (labels), metadata.button_urls = array of URL strings.
+  const gButtonLabels: string[] = []
+  const gButtonUrls: string[] = []
+  const gb1Label = (cfg.button1Label || '').trim()
+  const gb1Url = (cfg.button1Url || '').trim()
+  const gb2Label = (cfg.button2Label || '').trim()
+  const gb2Url = (cfg.button2Url || '').trim()
+  if (gb1Label && gb1Url && /^https?:\/\//i.test(gb1Url)) { gButtonLabels.push(gb1Label); gButtonUrls.push(gb1Url) }
+  if (gb2Label && gb2Url && /^https?:\/\//i.test(gb2Url)) { gButtonLabels.push(gb2Label); gButtonUrls.push(gb2Url) }
+  if (gButtonLabels.length > 0) {
+    activity.buttons = gButtonLabels
+    activity.metadata = { button_urls: gButtonUrls }
+  }
+
+  // CRITICAL: application_id = the game's real Discord app_id (spoofing)
+  activity.application_id = cfg.appId
 
   return activity
 }
@@ -143,10 +301,18 @@ export function buildCustomStatusActivity(
 
 /**
  * Build the full activities array for Discord Gateway OP 3.
- * Supports both Custom Status (type 4) AND Rich Presence Game/App Activity (type 0..5) simultaneously.
+ * Supports:
+ *   - Custom Status (type 4) — if statusEnabled
+ *   - Games RPC activity (type 0, game's app_id) — if gamesRpcEnabled (PRIORITY over normal RPC)
+ *   - Normal RPC activity (type 0, OAuth client_id) — if rpcEnabled and gamesRpc NOT active
+ *
+ * Games RPC and Normal RPC are NEVER both pushed simultaneously — Discord only shows
+ * one type-0 activity. Games RPC takes priority (more specific). Both have independent
+ * enable flags in the DB; the daemon picks which to display.
  */
 export async function buildPresenceActivities(options: {
   rpcConfig?: RpcConfig | null
+  gameActivity?: Record<string, unknown> | null
   customStatus?: string | null
   customStatusEmoji?: string | null
   placeholderCtx?: PlaceholderContext
@@ -155,7 +321,7 @@ export async function buildPresenceActivities(options: {
 }): Promise<Array<Record<string, unknown>>> {
   const activities: Array<Record<string, unknown>> = []
 
-  // 1. Custom status activity (type 4)
+  // 1. Custom status activity (type 4) — independent of RPC
   const customActivity = buildCustomStatusActivity(
     options.customStatus || null,
     options.customStatusEmoji || null
@@ -164,11 +330,16 @@ export async function buildPresenceActivities(options: {
     activities.push(customActivity)
   }
 
-  // 2. Rich Presence activity (type 0, etc.)
+  // 2. Games RPC activity (type 0, game's app_id) — PRIORITY over normal RPC
+  if (options.gameActivity) {
+    activities.push(options.gameActivity)
+  }
+
+  // 3. Normal RPC activity (type 0, OAuth client_id) — ONLY if no game activity
   const explicitPlatform = options.platform || options.rpcConfig?.platform
   const isVr = explicitPlatform === 'meta_quest' || (!!options.vrStatusActive && (!explicitPlatform || explicitPlatform === 'meta_quest'))
 
-  if (options.rpcConfig && options.rpcConfig.enabled !== false) {
+  if (!options.gameActivity && options.rpcConfig && options.rpcConfig.enabled !== false) {
     const ctx = options.placeholderCtx || {
       timezone: 'UTC',
       rpcStartedAt: Date.now(),
@@ -180,7 +351,6 @@ export async function buildPresenceActivities(options: {
         rpcActivity.state = 'In Virtual Reality'
       }
     }
-    // Activity Name is ALWAYS prioritized from custom NAME, falling back to platform name only when NAME is empty.
     rpcActivity.name = resolveRpcActivityName(options.rpcConfig?.name, isVr ? 'meta_quest' : explicitPlatform)
     activities.push(rpcActivity)
   }
@@ -374,6 +544,7 @@ export async function sendPresenceViaGateway(
               d: {
                 token: bearerToken,
                 properties,
+                intents: 0,
               },
             }
             ws.send(JSON.stringify(identify))

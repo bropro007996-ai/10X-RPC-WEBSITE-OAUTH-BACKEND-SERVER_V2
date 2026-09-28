@@ -1,24 +1,23 @@
 {
-  "name": "10x-rpc-backend-server",
-  "version": "2.0.0",
-  "private": true,
-  "description": "Lightweight 24/7 Discord RPC & Status Gateway Daemon",
+  "name": "10x-rpc-backend",
+  "version": "1.0.0",
+  "description": "10X RPC Backend Server — 24/7 Discord Gateway daemon",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "daemon": "npx tsx scripts/rpc-daemon-standalone.ts",
-    "postinstall": "prisma generate"
+    "dev": "node --watch index.js",
+    "postinstall": "npx prisma generate"
   },
   "dependencies": {
-    "@prisma/client": "^6.11.1",
-    "dotenv": "^16.4.7",
-    "prisma": "^6.11.1",
-    "tsx": "^4.23.13",
-    "ws": "^8.21.3"
+    "@prisma/client": "^6.19.2",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^22.13.9",
-    "@types/ws": "^8.18.1",
-    "typescript": "^5.8.2"
+    "prisma": "^6.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
